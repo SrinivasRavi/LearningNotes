@@ -69,14 +69,26 @@ public class LidarSensor : MonoBehaviour, Comm.BridgeClient
     Comm.Writer<Ros.PointCloud2> WriterPointCloud2;
     uint Sequence;
 
-    Vector4[] PointCloud;
+    Vector4[] PointCloud; //pts in a rotation
     byte[] RosPointCloud;
 
-    ComputeBuffer PointCloudBuffer;
+    ComputeBuffer PointCloudBuffer; //ComputerBuffer - GPU data buffer, mostly for use with compute shaders.
     int PointCloudLayerMask;
 
+    /*
+    Read from the GPU to system memory
+    ReadRequest is a read request made by the script to load whatever is there 
+     */
     struct ReadRequest
     {
+        /*
+        Vector2 - this structure is used in some places to represent 2D positions and vectors
+        (eg. texture coordinates in a mesh(this is likely the case) or texture offsets in Material)
+        In majority of other cases Vector3 is used.
+
+        AsyncTextureReader - Native unity plugin that lets you asynchronously copy textures and buffers from GPU memory to managed system memory. 
+        Looks like we are going to use read from GPU to system memory for visualizing inside Unity?
+         */
         public AsyncTextureReader<Vector2> Reader;
         public int Count;
         public int MaxRayCount;
@@ -87,13 +99,17 @@ public class LidarSensor : MonoBehaviour, Comm.BridgeClient
         public Vector3 DeltaX;
         public Vector3 DeltaY;
 
-        public Matrix4x4 Transform;
-
+        /*
+        Matrix4x4 - a standard 4x4 transformation matrix. perform arbitary linear 3D transformations (i.e translation, rotation, scale, shear, etc.) 
+        and perspective transformations using homogenous coordinates.
+         */
+        public Matrix4x4 Transform; 
         public float AngleEnd;
     }
 
     List<ReadRequest> Active = new List<ReadRequest>();
-    Stack<AsyncTextureReader<Vector2>> Available = new Stack<AsyncTextureReader<Vector2>>();
+
+    Stack<AsyncTextureReader<Vector2>> Available = new Stack<AsyncTextureReader<Vector2>>(); //Latest info is prioritized??
 
     int CurrentIndex;
     float AngleStart;
@@ -109,6 +125,11 @@ public class LidarSensor : MonoBehaviour, Comm.BridgeClient
     int RenderTextureHeight;
 
     float FixupAngle;
+
+
+    /*
+    LidarTemplate.cs has different configurations of Lidar to choose from. ApplyTemplate() applies the approriate one.
+     */
 
     public void ApplyTemplate()
     {
@@ -160,10 +181,10 @@ public class LidarSensor : MonoBehaviour, Comm.BridgeClient
         };
         Available.Clear();
 
-        if (PointCloudBuffer != null)
+        if (PointCloudBuffer != null) //Data from GPU is there in this
         {
-            PointCloudBuffer.Release();
-            PointCloudBuffer = null;
+            PointCloudBuffer.Release(); //Release a compute buffer
+            PointCloudBuffer = null; 
         }
 
         FixupAngle = AngleStart = 0.0f;
@@ -186,11 +207,11 @@ public class LidarSensor : MonoBehaviour, Comm.BridgeClient
             new Vector4(0, 0, b, 0));
         Camera.projectionMatrix = projection;
 
-        int count = RayCount * MeasurementsPerRotation;
-        PointCloud = new Vector4[count];
-        PointCloudBuffer = new ComputeBuffer(count, Marshal.SizeOf(typeof(Vector4)));
+        int count = RayCount * MeasurementsPerRotation; //no. of pts per rotation
+        PointCloud = new Vector4[count]; //PointCloud is array of those pts
+        PointCloudBuffer = new ComputeBuffer(count, Marshal.SizeOf(typeof(Vector4))); //load data from the GPU
 
-        RosPointCloud = new byte[32 * count];
+        RosPointCloud = new byte[32 * count]; //why 32* ? 4 byte of point info?
 
         CurrentRayCount = RayCount;
         CurrentMeasurementsPerRotation = MeasurementsPerRotation;
@@ -215,7 +236,7 @@ public class LidarSensor : MonoBehaviour, Comm.BridgeClient
         Active.Clear();
     }
 
-    void Update()
+    void Update() //next time start from this line
     {
         if (Agent == null)
         {
@@ -796,9 +817,16 @@ public class LidarSensor : MonoBehaviour, Comm.BridgeClient
         if (isVisualize && agentSetup.isSensorEffect && (Camera.current.cullingMask & PointCloudLayerMask) != 0)
         {
             var lidarToWorld = Compensated ? Matrix4x4.identity :  transform.localToWorldMatrix;
+            
+            /* Sets a named matrix for the shader. 
+            This is mostly used with custom shaders that need extra matrix parameters. 
+            Matrix parameters are not exposed in the material inspector, but can be set and queried with SetMatrix and GetMatrix from scripts.
+            Shader is called after this?
+            */
             PointCloudMaterial.SetMatrix("_LidarToWorld", lidarToWorld);
+            
             PointCloudMaterial.SetBuffer("PointCloud", PointCloudBuffer);
-            PointCloudMaterial.SetColor("_Color", PointColor);
+            PointCloudMaterial.SetColor("_Color", PointColor); //A special commit was made for this. (public Color PointColor = Color.red)
             PointCloudMaterial.SetPass(0);
             Graphics.DrawProcedural(MeshTopology.Points, PointCloud.Length);
         }
